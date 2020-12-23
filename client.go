@@ -170,7 +170,7 @@ func (c *_configService) GetNotifications(param *GetNotificationsParam) (bool, [
 
 	query := url.Values{}
 	query.Add("appId", param.AppID)
-	query.Add("_cluster", param.Cluster)
+	query.Add("cluster", param.Cluster)
 	query.Add("notifications", string(data))
 
 	response, err := c.requestApollo(param.AppID, param.Secret, finalURL, query)
