@@ -21,14 +21,7 @@ const (
 	_httpTimeout    = 60 * time.Second
 )
 
-// ConfigService ：Apollo分布式配置中心真正存储配置数据的服务，提供不带缓存和带缓存两种方式拉取配置
 type (
-	ConfigService interface {
-		GetConfig(param *GetConfigParam) (ConfigData, error)
-		GetConfigCache(param *GetConfigParam) (ConfigData, error)
-		GetNotifications(param *GetNotificationsParam) (bool, []Notification, error)
-	}
-
 	GetConfigParam struct {
 		AppID      string // 应用ID，必填
 		Cluster    string // 集群名称，选填
@@ -59,35 +52,35 @@ type (
 	}
 )
 
-type (
-	_configService struct {
-		httpClient *http.Client
-		baseURL    *url.URL
-	}
-)
+type Client struct {
+	HttpClient *http.Client
+	Request    *http.Request
+	BaseURL    *url.URL
+}
 
-func NewConfigService(httpClient *http.Client, serverAddr string) (ConfigService, error) {
+func NewClient(serverAddr string, httpClient *http.Client, request *http.Request) (*Client, error) {
 	baseURL, err := url.Parse(serverAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &_configService{
-		httpClient: httpClient,
-		baseURL:    baseURL,
+	return &Client{
+		HttpClient: httpClient,
+		Request:    request,
+		BaseURL:    baseURL,
 	}, nil
 }
 
 // GetConfig 通过不带缓存的Http接口从Apollo读取配置
-func (c *_configService) GetConfig(param *GetConfigParam) (ConfigData, error) {
+func (c *Client) GetConfig(param *GetConfigParam) (ConfigData, error) {
 	configData := ConfigData{}
 	if err := c.checkGetConfigParam(param); err != nil {
 		return configData, err
 	}
 
 	// URL: {config_server_url}/configs/{appId}/{clusterName}/{namespaceName}?releaseKey={releaseKey}&ip={clientIp}
-	finalURL := *c.baseURL
-	finalURL.Path += fmt.Sprintf("configs/%s/%s/%s", param.AppID, param.Cluster, param.Namespace)
+	finalURL := *c.BaseURL
+	finalURL.Path += fmt.Sprintf("/configs/%s/%s/%s", param.AppID, param.Cluster, param.Namespace)
 
 	query := url.Values{}
 	if param.ClientIP != "" {
@@ -117,15 +110,15 @@ func (c *_configService) GetConfig(param *GetConfigParam) (ConfigData, error) {
 }
 
 // GetConfigCache 通过带缓存的Http接口从Apollo读取配置
-func (c *_configService) GetConfigCache(param *GetConfigParam) (ConfigData, error) {
+func (c *Client) GetConfigCache(param *GetConfigParam) (ConfigData, error) {
 	configData := ConfigData{}
 	if err := c.checkGetConfigParam(param); err != nil {
 		return configData, err
 	}
 
 	// URL: {config_server_url}/configfiles/json/{appId}/{clusterName}/{namespaceName}?ip={clientIp}
-	finalURL := *c.baseURL
-	finalURL.Path += fmt.Sprintf("configfiles/json/%s/%s/%s", param.AppID, param.Cluster, param.Namespace)
+	finalURL := *c.BaseURL
+	finalURL.Path += fmt.Sprintf("/configfiles/json/%s/%s/%s", param.AppID, param.Cluster, param.Namespace)
 
 	query := url.Values{}
 	if param.ClientIP != "" {
@@ -152,7 +145,7 @@ func (c *_configService) GetConfigCache(param *GetConfigParam) (ConfigData, erro
 }
 
 // GetNotifications 应用感知配置更新（默认最长阻塞60秒）
-func (c *_configService) GetNotifications(param *GetNotificationsParam) (bool, []Notification, error) {
+func (c *Client) GetNotifications(param *GetNotificationsParam) (bool, []Notification, error) {
 	notifications := make([]Notification, 0)
 	err := c.checkGetNotificationsParam(param)
 	if err != nil {
@@ -165,8 +158,8 @@ func (c *_configService) GetNotifications(param *GetNotificationsParam) (bool, [
 	}
 
 	// URL: {config_server_url}/notifications/v2?appId={appId}&_cluster={clusterName}&notifications={notifications}
-	finalURL := *c.baseURL
-	finalURL.Path += "notifications/v2"
+	finalURL := *c.BaseURL
+	finalURL.Path += "/notifications/v2"
 
 	query := url.Values{}
 	query.Add("appId", param.AppID)
@@ -192,15 +185,23 @@ func (c *_configService) GetNotifications(param *GetNotificationsParam) (bool, [
 }
 
 // requestApollo 发起请求调用Apollo Config Service
-func (c *_configService) requestApollo(appId, secret string, finalURL url.URL, query url.Values) (*http.Response, error) {
+func (c *Client) requestApollo(appId, secret string, finalURL url.URL, query url.Values) (*http.Response, error) {
 	rawQuery := query.Encode()
 	if rawQuery != "" {
 		finalURL.RawQuery = rawQuery
 	}
 
-	request, err := http.NewRequest(http.MethodGet, finalURL.String(), nil)
-	if err != nil {
-		return nil, err
+	var request *http.Request
+	var err error
+	if c.Request == nil {
+		request, err = http.NewRequest(http.MethodGet, finalURL.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		request = c.Request.Clone(c.Request.Context())
+		request.Method = http.MethodGet
+		request.URL = &finalURL
 	}
 
 	request.Header.Set("Accept", "application/json")
@@ -217,7 +218,7 @@ func (c *_configService) requestApollo(appId, secret string, finalURL url.URL, q
 		request.Header.Set("Timestamp", strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10))
 	}
 
-	httpClient := c.httpClient
+	httpClient := c.HttpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 		httpClient.Timeout = _httpTimeout
@@ -236,7 +237,7 @@ func (c *_configService) requestApollo(appId, secret string, finalURL url.URL, q
 	return response, nil
 }
 
-func (c *_configService) signature(secret, uri string, timestamp time.Time) (string, error) {
+func (c *Client) signature(secret, uri string, timestamp time.Time) (string, error) {
 	var err error
 	uri, err = url2PathWithQuery(uri)
 	if err != nil {
@@ -268,7 +269,7 @@ func url2PathWithQuery(uri string) (string, error) {
 	return pathWithQuery, nil
 }
 
-func (c *_configService) checkGetConfigParam(param *GetConfigParam) error {
+func (c *Client) checkGetConfigParam(param *GetConfigParam) error {
 	if param == nil {
 		return errors.New("GetConfigParam nil")
 	}
@@ -295,7 +296,7 @@ func (c *_configService) checkGetConfigParam(param *GetConfigParam) error {
 	return nil
 }
 
-func (c *_configService) checkGetNotificationsParam(param *GetNotificationsParam) error {
+func (c *Client) checkGetNotificationsParam(param *GetNotificationsParam) error {
 	if param == nil {
 		return errors.New("GetNotificationsParam nil")
 	}
@@ -305,7 +306,7 @@ func (c *_configService) checkGetNotificationsParam(param *GetNotificationsParam
 	}
 
 	if param.Cluster == "" {
-		return errors.New("GetNotificationsParam.Cluster nil")
+		param.Cluster = _defaultCluster
 	}
 
 	if len(param.Notifications) == 0 {
