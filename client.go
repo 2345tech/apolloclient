@@ -226,7 +226,7 @@ func (c *Client) requestApollo(appId, secret string, finalURL url.URL, query url
 
 	response, err := httpClient.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("httpClient.Do error %v, url is %v", err, finalURL.String())
 	}
 
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotModified {
