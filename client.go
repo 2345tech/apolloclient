@@ -199,9 +199,9 @@ func (c *Client) requestApollo(appId, secret string, finalURL url.URL, query url
 			return nil, err
 		}
 	} else {
-		request = c.Request.Clone(c.Request.Context())
-		request.Method = http.MethodGet
-		request.URL = &finalURL
+		if request, err = http.NewRequestWithContext(c.Request.Context(), http.MethodGet, finalURL.String(), nil); err != nil {
+			return nil, err
+		}
 	}
 
 	request.Header.Set("Accept", "application/json")
